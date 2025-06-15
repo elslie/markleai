@@ -18,11 +18,25 @@ const client = new Client({
   intents: [
     GatewayIntentBits.Guilds,
     GatewayIntentBits.GuildMessages,
-    GatewayIntentBits.MessageContent
-  ]
+    GatewayIntentBits.MessageContent,
+  ],
 });
 
-client.on('messageCreate', message => {
+const TEST_CHANNEL_ID = '1382577291015749674'; // replace with your test server channel ID
+
+client.once('ready', () => {
+  console.log(`Logged in as ${client.user.tag}`);
+
+  // Ping test channel every 15 minutes to stay alive
+  setInterval(() => {
+    const channel = client.channels.cache.get(TEST_CHANNEL_ID);
+    if (channel) {
+      channel.send('Bot is still online! 🔥').catch(console.error);
+    }
+  }, 1000 * 60 * 15); // every 15 minutes
+});
+
+client.on('messageCreate', (message) => {
   if (message.content === '!ping') {
     message.channel.send('Pong! I am alive and ready.');
   }
@@ -49,19 +63,19 @@ client.on('messageCreate', async (message) => {
 
     const prompt = [
       { role: 'system', content: 'You are a helpful and witty assistant in a Discord chat.' },
-      ...messagesForAI
+      ...messagesForAI,
     ];
 
     try {
       const response = await axios.post('https://openrouter.ai/api/v1/chat/completions', {
-        model: "openai/gpt-3.5-turbo", // Or another free model
+        model: 'openai/gpt-3.5-turbo', // Or another free model
         messages: prompt,
       }, {
         headers: {
-          'Authorization': `Bearer ${process.env.OPENROUTER_API_KEY}`,
+          Authorization: `Bearer ${process.env.OPENROUTER_API_KEY}`,
           'HTTP-Referer': 'https://yourdomain.com', // Replace or omit
-          'Content-Type': 'application/json'
-        }
+          'Content-Type': 'application/json',
+        },
       });
 
       const reply = response.data.choices[0].message.content;
