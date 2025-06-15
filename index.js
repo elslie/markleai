@@ -30,206 +30,104 @@ const client = new Client({
 // Configuration
 const CONFIG = {
   TEST_CHANNEL_ID: process.env.TEST_CHANNEL_ID || '1382577291015749674',
-  MAX_HISTORY: 10,
+  MAX_HISTORY: 8,
   PING_INTERVAL: 15 * 60 * 1000, // 15 minutes
   MAX_MESSAGE_LENGTH: 2000,
-  HF_MODEL: process.env.HF_MODEL || 'microsoft/DialoGPT-medium',
-  HF_API_URL: 'https://api-inference.huggingface.co/models/'
+  REQUEST_TIMEOUT: 20000
 };
 
-// Store message history per channel
-const messageHistory = new Map();
+// Store conversation history per channel
+const conversationHistory = new Map();
 const processingMessages = new Set();
 
 // Helper functions
-const addToHistory = (channelId, message) => {
-  if (!messageHistory.has(channelId)) {
-    messageHistory.set(channelId, []);
+const addToHistory = (channelId, role, content) => {
+  if (!conversationHistory.has(channelId)) {
+    conversationHistory.set(channelId, []);
   }
   
-  const history = messageHistory.get(channelId);
-  history.push({
-    role: message.author.bot ? 'assistant' : 'user',
-    content: message.content,
-    timestamp: Date.now()
-  });
+  const history = conversationHistory.get(channelId);
+  history.push({ role, content, timestamp: Date.now() });
   
+  // Keep only recent messages to maintain context without overwhelming the model
   if (history.length > CONFIG.MAX_HISTORY) {
     history.shift();
   }
 };
 
-const truncateMessage = (message, maxLength = CONFIG.MAX_MESSAGE_LENGTH) => {
-  if (message.length <= maxLength) return message;
-  return message.substring(0, maxLength - 3) + '...';
+const formatConversationForModel = (history, currentMessage) => {
+  let conversation = "";
+  
+  // Add recent conversation history
+  for (const msg of history.slice(-6)) { // Last 6 messages for context
+    if (msg.role === 'user') {
+      conversation += `Human: ${msg.content}\n`;
+    } else {
+      conversation += `Assistant: ${msg.content}\n`;
+    }
+  }
+  
+  // Add current message
+  conversation += `Human: ${currentMessage}\nAssistant:`;
+  return conversation;
 };
 
-// Enhanced response generation with multiple strategies
-async function generateResponse(userMessage, history = []) {
-  // Skip empty or very short messages
-  if (!userMessage || userMessage.length < 2) {
-    return "What's on your mind?";
+// AI Response Generation - Multiple providers with fallback
+async function generateAIResponse(userMessage, history = []) {
+  // Clean and validate input
+  const cleanMessage = userMessage.trim();
+  if (!cleanMessage || cleanMessage.length < 1) {
+    return "I'm here! What would you like to talk about?";
   }
-  
-  // Try Hugging Face first with better filtering
-  try {
-    const hfResponse = await callHuggingFace(userMessage, history);
-    if (hfResponse && 
-        hfResponse.length > 5 && 
-        !hfResponse.match(/^(hi|hello|hey|i'm here|thanks)\.?$/i) &&
-        !hfResponse.includes("I'm here") &&
-        !hfResponse.includes("would you like to")) {
-      console.log('Using HF response:', hfResponse);
-      return hfResponse;
-    }
-  } catch (error) {
-    console.log('Hugging Face failed, using fallback');
-  }
-  
-  // Enhanced fallback system based on message content
-  return generateSmartFallback(userMessage, history);
-}
 
-// Smart fallback responses based on message analysis
-function generateSmartFallback(message, history = []) {
-  const msg = message.toLowerCase().trim();
-  
-  // Handle basic greetings
-  if (msg.match(/^(hi|hello|hey|sup|what's up|whats up)$/)) {
-    const greetings = [
-      "Hey! What's going on?",
-      "Hi there! How's your day going?",
-      "Hello! What brings you here today?",
-      "Hey! Good to see you! What's new?",
-      "Hi! What would you like to chat about?"
-    ];
-    return greetings[Math.floor(Math.random() * greetings.length)];
-  }
-  
-  // Handle "what's up" variations with more context
-  if (msg.match(/what.*up|whats.*up|wassup/)) {
-    const responses = [
-      "Not much, just hanging out here! What about you?",
-      "Just chilling and ready to chat! How about you?",
-      "Nothing too exciting, but I'm here to talk! What's new with you?",
-      "Just vibing! What's going on in your world?",
-      "Same old, same old! What brings you by?"
-    ];
-    return responses[Math.floor(Math.random() * responses.length)];
-  }
-  
-  // Handle abbreviations and slang better
-  if (msg.match(/\bs\b.*\bp\b|s and p/)) {
-    const responses = [
-      "Not sure what you mean by that - could you explain?",
-      "I didn't catch that, could you clarify?",
-      "What do you mean exactly?",
-      "Can you elaborate on that?",
-      "I'm not following - what are you referring to?"
-    ];
-    return responses[Math.floor(Math.random() * responses.length)];
-  }
-  
-  // Handle questions
-  if (msg.includes('?')) {
-    const responses = [
-      "That's an interesting question! What do you think?",
-      "Good question! I'd love to hear your perspective on that.",
-      "Hmm, that's worth thinking about. What's your take?",
-      "What made you curious about that?",
-      "That's something I find fascinating too!"
-    ];
-    return responses[Math.floor(Math.random() * responses.length)];
-  }
-  
-  // Handle common topics
-  if (msg.match(/game|gaming|play/)) {
-    return "Gaming sounds fun! What games are you into?";
-  }
-  
-  if (msg.match(/music|song|listen/)) {
-    return "Music is awesome! What kind of music do you like?";
-  }
-  
-  if (msg.match(/movie|film|watch|tv|show/)) {
-    return "Cool! What have you been watching lately?";
-  }
-  
-  if (msg.match(/work|job|school/)) {
-    return "How's that going for you?";
-  }
-  
-  if (msg.match(/tired|sleepy|busy/)) {
-    return "I hear you! Sometimes you just need a break.";
-  }
-  
-  if (msg.match(/thanks|thank you|thx/)) {
-    return "You're welcome! What else is on your mind?";
-  }
-  
-  // Handle longer messages with more substance
-  if (message.length > 20) {
-    const responses = [
-      "That's really interesting! Tell me more.",
-      "I see what you mean. What do you think about that?",
-      "That's a good point. How do you feel about it?",
-      "Interesting perspective! What's your experience with that?",
-      "That sounds worth exploring further!"
-    ];
-    return responses[Math.floor(Math.random() * responses.length)];
-  }
-  
-  // Default responses for short/unclear messages
-  const defaultResponses = [
-    "What's on your mind?",
-    "Tell me more about that!",
-    "What would you like to talk about?",
-    "I'm listening - what's up?",
-    "What brings you here today?"
+  // Try different AI providers in order of preference
+  const providers = [
+    () => callHuggingFaceConversational(cleanMessage, history),
+    () => callHuggingFaceText(cleanMessage, history),
+    () => callOpenAI(cleanMessage, history) // If you have OpenAI key
   ];
-  
-  return defaultResponses[Math.floor(Math.random() * defaultResponses.length)];
-}
 
-// Improved Hugging Face API call
-async function callHuggingFace(text, history = [], retries = 2) {
-  const models = [
-    'microsoft/DialoGPT-medium',
-    'facebook/blenderbot-400M-distill'
-  ];
-  
-  for (let i = 0; i < models.length; i++) {
-    const model = models[i];
-    
+  for (const provider of providers) {
     try {
-      console.log(`Trying model: ${model} with input: "${text}"`);
-      
-      // Prepare input based on model type
-      let inputText = text;
-      
-      if (model.includes('DialoGPT')) {
-        // For DialoGPT, use conversation format
-        const recentHistory = history.slice(-2);
-        let conversation = '';
-        
-        for (const msg of recentHistory) {
-          conversation += `${msg.role === 'user' ? 'Human' : 'Bot'}: ${msg.content}\n`;
-        }
-        conversation += `Human: ${text}\nBot:`;
-        inputText = conversation;
+      const response = await provider();
+      if (response && response.length > 3 && response.length < 500) {
+        return response;
       }
+    } catch (error) {
+      console.log(`Provider failed: ${error.message}`);
+      continue;
+    }
+  }
+
+  // If all AI providers fail, return a helpful message
+  return "I'm having trouble with my AI systems right now, but I'm still here! Could you try rephrasing that?";
+}
+
+// Primary: Conversational AI models
+async function callHuggingFaceConversational(message, history) {
+  const models = [
+    'facebook/blenderbot-400M-distill',
+    'microsoft/DialoGPT-large',
+    'facebook/blenderbot_small-90M'
+  ];
+
+  for (const model of models) {
+    try {
+      console.log(`Trying conversational model: ${model}`);
       
       const response = await axios.post(
-        `${CONFIG.HF_API_URL}${model}`,
-        { 
-          inputs: inputText,
+        `https://api-inference.huggingface.co/models/${model}`,
+        {
+          inputs: {
+            past_user_inputs: history.filter(h => h.role === 'user').slice(-3).map(h => h.content),
+            generated_responses: history.filter(h => h.role === 'assistant').slice(-3).map(h => h.content),
+            text: message
+          },
           parameters: {
-            max_new_tokens: 60,
+            temperature: 0.8,
+            max_length: 100,
             do_sample: true,
-            temperature: 0.7,
-            top_p: 0.9,
-            repetition_penalty: 1.2,
-            pad_token_id: 50256
+            top_p: 0.9
           }
         },
         {
@@ -237,67 +135,159 @@ async function callHuggingFace(text, history = [], retries = 2) {
             'Authorization': `Bearer ${process.env.HUGGINGFACE_API_KEY}`,
             'Content-Type': 'application/json',
           },
-          timeout: 15000
+          timeout: CONFIG.REQUEST_TIMEOUT
         }
       );
 
-      if (response.data && response.data.length > 0) {
-        let reply = response.data[0].generated_text || response.data[0].response || '';
-        
-        // Clean up DialoGPT response
-        if (model.includes('DialoGPT')) {
-          // Remove the input conversation from the response
-          if (reply.includes('Bot:')) {
-            const parts = reply.split('Bot:');
-            reply = parts[parts.length - 1].trim();
-          }
-          
-          // Remove any remaining conversation artifacts
-          reply = reply
-            .replace(/Human:.*$/gi, '')
-            .replace(/Bot:.*$/gi, '')
-            .split('\n')[0] // Take only first line
-            .trim();
-        }
-        
-        // General cleanup
-        reply = reply
-          .replace(/^(Assistant:|AI:|Bot:)/i, '')
-          .replace(/\n+/g, ' ')
-          .replace(/\s+/g, ' ')
-          .trim();
-        
-        // Filter out bad responses
-        if (reply && 
-            reply.length > 3 && 
-            reply.length < 200 &&
-            !reply.match(/^(hi|hello|hey|ok|yes|no|sure)\.?$/i) &&
-            !reply.includes('I don\'t know') &&
-            !reply.includes('I can\'t') &&
-            !reply.includes('sorry')) {
-          
-          console.log(`Got good response from ${model}: "${reply}"`);
+      let reply = response.data?.generated_text || response.data?.response || '';
+      
+      if (reply && typeof reply === 'string') {
+        reply = cleanAIResponse(reply);
+        if (isValidResponse(reply)) {
+          console.log(`✅ Got response from ${model}: "${reply}"`);
           return reply;
-        } else {
-          console.log(`Filtered out response from ${model}: "${reply}"`);
         }
       }
-      
+
     } catch (error) {
-      console.log(`Model ${model} failed:`, error.response?.data?.error || error.message);
-      
-      // If model is loading, wait and retry
-      if (error.response?.data?.error?.includes('loading') && retries > 0) {
-        console.log(`Model ${model} is loading, waiting 10 seconds...`);
-        await new Promise(resolve => setTimeout(resolve, 10000));
-        return await callHuggingFace(text, history, retries - 1);
+      if (error.response?.status === 503) {
+        console.log(`Model ${model} is loading...`);
+        continue;
       }
+      console.log(`Model ${model} error:`, error.message);
     }
   }
   
-  // Return null to trigger fallback
-  console.log('All HF models failed, using fallback');
   return null;
+}
+
+// Secondary: Text generation models
+async function callHuggingFaceText(message, history) {
+  const models = [
+    'gpt2',
+    'EleutherAI/gpt-neo-125M',
+    'distilgpt2'
+  ];
+
+  for (const model of models) {
+    try {
+      console.log(`Trying text model: ${model}`);
+      
+      // Create a prompt that encourages conversational response
+      const conversationPrompt = formatConversationForModel(history, message);
+      
+      const response = await axios.post(
+        `https://api-inference.huggingface.co/models/${model}`,
+        {
+          inputs: conversationPrompt,
+          parameters: {
+            max_new_tokens: 50,
+            temperature: 0.7,
+            do_sample: true,
+            top_p: 0.9,
+            repetition_penalty: 1.1,
+            stop: ["Human:", "Assistant:", "\n\n"]
+          }
+        },
+        {
+          headers: {
+            'Authorization': `Bearer ${process.env.HUGGINGFACE_API_KEY}`,
+            'Content-Type': 'application/json',
+          },
+          timeout: CONFIG.REQUEST_TIMEOUT
+        }
+      );
+
+      let reply = response.data?.[0]?.generated_text || '';
+      
+      if (reply) {
+        // Extract just the assistant's response
+        reply = reply.replace(conversationPrompt, '').trim();
+        reply = cleanAIResponse(reply);
+        
+        if (isValidResponse(reply)) {
+          console.log(`✅ Got response from ${model}: "${reply}"`);
+          return reply;
+        }
+      }
+
+    } catch (error) {
+      console.log(`Text model ${model} error:`, error.message);
+    }
+  }
+  
+  return null;
+}
+
+// Optional: OpenAI fallback (if you have API key)
+async function callOpenAI(message, history) {
+  if (!process.env.OPENAI_API_KEY) return null;
+  
+  try {
+    const messages = [
+      { role: 'system', content: 'You are a helpful, friendly Discord chatbot. Keep responses conversational and under 100 words.' }
+    ];
+    
+    // Add conversation history
+    for (const msg of history.slice(-4)) {
+      messages.push({ role: msg.role, content: msg.content });
+    }
+    
+    messages.push({ role: 'user', content: message });
+
+    const response = await axios.post(
+      'https://api.openai.com/v1/chat/completions',
+      {
+        model: 'gpt-3.5-turbo',
+        messages: messages,
+        max_tokens: 100,
+        temperature: 0.8
+      },
+      {
+        headers: {
+          'Authorization': `Bearer ${process.env.OPENAI_API_KEY}`,
+          'Content-Type': 'application/json',
+        },
+        timeout: CONFIG.REQUEST_TIMEOUT
+      }
+    );
+
+    const reply = response.data?.choices?.[0]?.message?.content;
+    if (reply && isValidResponse(reply)) {
+      console.log('✅ Got OpenAI response');
+      return cleanAIResponse(reply);
+    }
+  } catch (error) {
+    console.log('OpenAI error:', error.message);
+  }
+  
+  return null;
+}
+
+// Response cleaning and validation
+function cleanAIResponse(response) {
+  return response
+    .replace(/^(Assistant:|AI:|Bot:|Human:)/i, '')
+    .replace(/\n+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .replace(/[^\w\s.,!?'-]/g, '')
+    .trim()
+    .substring(0, 300); // Reasonable length limit
+}
+
+function isValidResponse(response) {
+  if (!response || response.length < 3 || response.length > 300) return false;
+  
+  // Filter out common bad responses
+  const badPatterns = [
+    /^(hi|hello|hey|ok|yes|no|sure|thanks)\.?$/i,
+    /^(i don't|i can't|sorry|i'm sorry)/i,
+    /^(what|how|when|where|why)\??$/i,
+    /^[^\w]*$/,
+    /(.)\1{4,}/ // Repeated characters
+  ];
+  
+  return !badPatterns.some(pattern => pattern.test(response));
 }
 
 // Discord event handlers
@@ -305,17 +295,17 @@ client.once('ready', () => {
   console.log(`✅ Logged in as ${client.user.tag}`);
   console.log(`📊 Serving ${client.guilds.cache.size} guilds`);
   
-  client.user.setActivity('for mentions | !ping', { type: 'WATCHING' });
+  client.user.setActivity('conversations | !ping', { type: 'LISTENING' });
   
   // Keep-alive ping
   setInterval(() => {
     const channel = client.channels.cache.get(CONFIG.TEST_CHANNEL_ID);
     if (channel && channel.isTextBased()) {
       const messages = [
-        '🤖 Bot is alive and ready to chat! 🤗',
-        '⚡ Enhanced AI responses active!',
-        '🔥 Free conversational AI running!',
-        '📡 Multiple AI models loaded and ready!'
+        '🤖 AI chatbot online and ready!',
+        '💬 Having natural conversations!',
+        '🧠 Multiple AI models loaded!',
+        '⚡ Powered by real AI, not if-statements!'
       ];
       const randomMessage = messages[Math.floor(Math.random() * messages.length)];
       channel.send(randomMessage).catch(console.error);
@@ -330,13 +320,13 @@ client.on('messageCreate', async (message) => {
   if (message.content.toLowerCase() === '!ping') {
     const embed = {
       color: 0x00ff00,
-      title: '🏓 Pong!',
-      description: 'Enhanced AI bot powered by Hugging Face! 🤗',
+      title: '🤖 AI Chatbot Status',
+      description: 'Real AI conversation, no hardcoded responses!',
       fields: [
         { name: '⏱️ Latency', value: `${Date.now() - message.createdTimestamp}ms`, inline: true },
-        { name: '📡 API Latency', value: `${Math.round(client.ws.ping)}ms`, inline: true },
-        { name: '🤖 AI Provider', value: 'Hugging Face + Smart Fallbacks', inline: true },
-        { name: '💬 Features', value: 'Context-aware responses', inline: false },
+        { name: '📡 Discord', value: `${Math.round(client.ws.ping)}ms`, inline: true },
+        { name: '🧠 AI Models', value: 'HuggingFace + Fallbacks', inline: true },
+        { name: '💬 Type', value: 'Conversational AI', inline: false },
       ],
       timestamp: new Date().toISOString(),
     };
@@ -345,34 +335,26 @@ client.on('messageCreate', async (message) => {
     return;
   }
   
-  // Add to history
-  addToHistory(message.channel.id, message);
-  
   // Respond when mentioned or in DMs
   if (message.mentions.has(client.user) || message.channel.type === 1) {
     const messageId = message.id;
     
-    if (processingMessages.has(messageId)) {
-      return;
-    }
-    
+    if (processingMessages.has(messageId)) return;
     processingMessages.add(messageId);
     
     try {
-      await handleAIResponse(message);
+      await handleAIConversation(message);
     } finally {
-      setTimeout(() => {
-        processingMessages.delete(messageId);
-      }, 5000);
+      setTimeout(() => processingMessages.delete(messageId), 5000);
     }
   }
 });
 
-async function handleAIResponse(message) {
+async function handleAIConversation(message) {
   const channelId = message.channel.id;
-  const history = messageHistory.get(channelId) || [];
+  const history = conversationHistory.get(channelId) || [];
   
-  // Show typing
+  // Show typing indicator
   const typingInterval = setInterval(() => {
     message.channel.sendTyping().catch(() => clearInterval(typingInterval));
   }, 5000);
@@ -386,25 +368,25 @@ async function handleAIResponse(message) {
       .replace(/<@!?\d+>/g, '')
       .trim();
     
-    console.log('Processing message:', userMessage);
+    console.log(`💬 Processing: "${userMessage}"`);
     
-    // Generate response using enhanced system
-    const reply = await generateResponse(userMessage, history);
+    // Generate AI response
+    const aiReply = await generateAIResponse(userMessage, history);
     
-    if (reply) {
-      const truncatedReply = truncateMessage(reply);
-      await message.reply(truncatedReply);
+    if (aiReply) {
+      // Send response
+      await message.reply(aiReply);
       
-      // Add bot response to history
-      addToHistory(channelId, {
-        author: { bot: true },
-        content: truncatedReply
-      });
+      // Store conversation
+      addToHistory(channelId, 'user', userMessage);
+      addToHistory(channelId, 'assistant', aiReply);
+      
+      console.log(`✅ Responded: "${aiReply}"`);
     }
     
   } catch (error) {
-    console.error('Response Error:', error);
-    await message.reply('🤖 Something went wrong, but I\'m still here! Try asking me something else!').catch(console.error);
+    console.error('❌ Conversation Error:', error);
+    await message.reply('🤖 My AI brain had a hiccup! Try asking me something else.').catch(console.error);
     
   } finally {
     clearInterval(typingInterval);
