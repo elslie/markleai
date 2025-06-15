@@ -30,282 +30,244 @@ const client = new Client({
 // Configuration
 const CONFIG = {
   TEST_CHANNEL_ID: process.env.TEST_CHANNEL_ID || '1382577291015749674',
-  MAX_HISTORY: 8,
-  PING_INTERVAL: 15 * 60 * 1000, // 15 minutes
+  MAX_HISTORY: 10,
+  PING_INTERVAL: 15 * 60 * 1000,
   MAX_MESSAGE_LENGTH: 2000,
-  REQUEST_TIMEOUT: 20000
+  REQUEST_TIMEOUT: 30000
 };
 
 // Store conversation history per channel
 const conversationHistory = new Map();
 const processingMessages = new Set();
 
-// Helper functions
+// Add message to conversation history
 const addToHistory = (channelId, role, content) => {
   if (!conversationHistory.has(channelId)) {
     conversationHistory.set(channelId, []);
   }
   
   const history = conversationHistory.get(channelId);
-  history.push({ role, content, timestamp: Date.now() });
+  history.push({ role, content });
   
-  // Keep only recent messages to maintain context without overwhelming the model
   if (history.length > CONFIG.MAX_HISTORY) {
     history.shift();
   }
 };
 
-const formatConversationForModel = (history, currentMessage) => {
-  let conversation = "";
-  
-  // Add recent conversation history
-  for (const msg of history.slice(-6)) { // Last 6 messages for context
-    if (msg.role === 'user') {
-      conversation += `Human: ${msg.content}\n`;
-    } else {
-      conversation += `Assistant: ${msg.content}\n`;
-    }
-  }
-  
-  // Add current message
-  conversation += `Human: ${currentMessage}\nAssistant:`;
-  return conversation;
-};
-
-// AI Response Generation - Multiple providers with fallback
+// Main AI response function - tries multiple approaches
 async function generateAIResponse(userMessage, history = []) {
-  // Clean and validate input
-  const cleanMessage = userMessage.trim();
-  if (!cleanMessage || cleanMessage.length < 1) {
-    return "I'm here! What would you like to talk about?";
-  }
-
-  // Try different AI providers in order of preference
-  const providers = [
-    () => callHuggingFaceConversational(cleanMessage, history),
-    () => callHuggingFaceText(cleanMessage, history),
-    () => callOpenAI(cleanMessage, history) // If you have OpenAI key
+  console.log(`🤖 Generating response for: "${userMessage}"`);
+  
+  // Try different AI services in order of preference
+  const aiProviders = [
+    () => callOpenAI(userMessage, history),
+    () => callGroq(userMessage, history),
+    () => callCohere(userMessage, history),
+    () => callAnthropic(userMessage, history),
+    () => callHuggingFaceChat(userMessage, history)
   ];
 
-  for (const provider of providers) {
+  for (const provider of aiProviders) {
     try {
       const response = await provider();
-      if (response && response.length > 3 && response.length < 500) {
+      if (response && response.trim().length > 0) {
+        console.log(`✅ Got AI response: "${response.substring(0, 100)}..."`);
         return response;
       }
     } catch (error) {
-      console.log(`Provider failed: ${error.message}`);
+      console.log(`❌ Provider failed: ${error.message}`);
       continue;
     }
   }
 
   // If all AI providers fail, return a helpful message
-  return "I'm having trouble with my AI systems right now, but I'm still here! Could you try rephrasing that?";
+  return "I'm having some technical difficulties right now, but I'm still here! Could you try asking me something else?";
 }
 
-// Primary: Conversational AI models
-async function callHuggingFaceConversational(message, history) {
-  const models = [
-    'facebook/blenderbot-400M-distill',
-    'microsoft/DialoGPT-large',
-    'facebook/blenderbot_small-90M'
-  ];
-
-  for (const model of models) {
-    try {
-      console.log(`Trying conversational model: ${model}`);
-      
-      const response = await axios.post(
-        `https://api-inference.huggingface.co/models/${model}`,
-        {
-          inputs: {
-            past_user_inputs: history.filter(h => h.role === 'user').slice(-3).map(h => h.content),
-            generated_responses: history.filter(h => h.role === 'assistant').slice(-3).map(h => h.content),
-            text: message
-          },
-          parameters: {
-            temperature: 0.8,
-            max_length: 100,
-            do_sample: true,
-            top_p: 0.9
-          }
-        },
-        {
-          headers: {
-            'Authorization': `Bearer ${process.env.HUGGINGFACE_API_KEY}`,
-            'Content-Type': 'application/json',
-          },
-          timeout: CONFIG.REQUEST_TIMEOUT
-        }
-      );
-
-      let reply = response.data?.generated_text || response.data?.response || '';
-      
-      if (reply && typeof reply === 'string') {
-        reply = cleanAIResponse(reply);
-        if (isValidResponse(reply)) {
-          console.log(`✅ Got response from ${model}: "${reply}"`);
-          return reply;
-        }
-      }
-
-    } catch (error) {
-      if (error.response?.status === 503) {
-        console.log(`Model ${model} is loading...`);
-        continue;
-      }
-      console.log(`Model ${model} error:`, error.message);
-    }
-  }
-  
-  return null;
-}
-
-// Secondary: Text generation models
-async function callHuggingFaceText(message, history) {
-  const models = [
-    'gpt2',
-    'EleutherAI/gpt-neo-125M',
-    'distilgpt2'
-  ];
-
-  for (const model of models) {
-    try {
-      console.log(`Trying text model: ${model}`);
-      
-      // Create a prompt that encourages conversational response
-      const conversationPrompt = formatConversationForModel(history, message);
-      
-      const response = await axios.post(
-        `https://api-inference.huggingface.co/models/${model}`,
-        {
-          inputs: conversationPrompt,
-          parameters: {
-            max_new_tokens: 50,
-            temperature: 0.7,
-            do_sample: true,
-            top_p: 0.9,
-            repetition_penalty: 1.1,
-            stop: ["Human:", "Assistant:", "\n\n"]
-          }
-        },
-        {
-          headers: {
-            'Authorization': `Bearer ${process.env.HUGGINGFACE_API_KEY}`,
-            'Content-Type': 'application/json',
-          },
-          timeout: CONFIG.REQUEST_TIMEOUT
-        }
-      );
-
-      let reply = response.data?.[0]?.generated_text || '';
-      
-      if (reply) {
-        // Extract just the assistant's response
-        reply = reply.replace(conversationPrompt, '').trim();
-        reply = cleanAIResponse(reply);
-        
-        if (isValidResponse(reply)) {
-          console.log(`✅ Got response from ${model}: "${reply}"`);
-          return reply;
-        }
-      }
-
-    } catch (error) {
-      console.log(`Text model ${model} error:`, error.message);
-    }
-  }
-  
-  return null;
-}
-
-// Optional: OpenAI fallback (if you have API key)
+// OpenAI ChatGPT API (most reliable)
 async function callOpenAI(message, history) {
-  if (!process.env.OPENAI_API_KEY) return null;
+  if (!process.env.OPENAI_API_KEY) throw new Error('No OpenAI API key');
   
-  try {
-    const messages = [
-      { role: 'system', content: 'You are a helpful, friendly Discord chatbot. Keep responses conversational and under 100 words.' }
-    ];
-    
-    // Add conversation history
-    for (const msg of history.slice(-4)) {
-      messages.push({ role: msg.role, content: msg.content });
+  const messages = [
+    {
+      role: 'system',
+      content: 'You are a helpful, friendly Discord chatbot. Be conversational, engaging, and helpful. Keep responses under 300 words and match the tone of the conversation. You can discuss any topic naturally.'
     }
-    
-    messages.push({ role: 'user', content: message });
-
-    const response = await axios.post(
-      'https://api.openai.com/v1/chat/completions',
-      {
-        model: 'gpt-3.5-turbo',
-        messages: messages,
-        max_tokens: 100,
-        temperature: 0.8
-      },
-      {
-        headers: {
-          'Authorization': `Bearer ${process.env.OPENAI_API_KEY}`,
-          'Content-Type': 'application/json',
-        },
-        timeout: CONFIG.REQUEST_TIMEOUT
-      }
-    );
-
-    const reply = response.data?.choices?.[0]?.message?.content;
-    if (reply && isValidResponse(reply)) {
-      console.log('✅ Got OpenAI response');
-      return cleanAIResponse(reply);
-    }
-  } catch (error) {
-    console.log('OpenAI error:', error.message);
-  }
-  
-  return null;
-}
-
-// Response cleaning and validation
-function cleanAIResponse(response) {
-  return response
-    .replace(/^(Assistant:|AI:|Bot:|Human:)/i, '')
-    .replace(/\n+/g, ' ')
-    .replace(/\s+/g, ' ')
-    .replace(/[^\w\s.,!?'-]/g, '')
-    .trim()
-    .substring(0, 300); // Reasonable length limit
-}
-
-function isValidResponse(response) {
-  if (!response || response.length < 3 || response.length > 300) return false;
-  
-  // Filter out common bad responses
-  const badPatterns = [
-    /^(hi|hello|hey|ok|yes|no|sure|thanks)\.?$/i,
-    /^(i don't|i can't|sorry|i'm sorry)/i,
-    /^(what|how|when|where|why)\??$/i,
-    /^[^\w]*$/,
-    /(.)\1{4,}/ // Repeated characters
   ];
   
-  return !badPatterns.some(pattern => pattern.test(response));
+  // Add conversation history
+  for (const msg of history.slice(-6)) {
+    messages.push({ role: msg.role, content: msg.content });
+  }
+  
+  messages.push({ role: 'user', content: message });
+
+  const response = await axios.post(
+    'https://api.openai.com/v1/chat/completions',
+    {
+      model: 'gpt-3.5-turbo',
+      messages: messages,
+      max_tokens: 200,
+      temperature: 0.8,
+      presence_penalty: 0.6,
+      frequency_penalty: 0.3
+    },
+    {
+      headers: {
+        'Authorization': `Bearer ${process.env.OPENAI_API_KEY}`,
+        'Content-Type': 'application/json',
+      },
+      timeout: CONFIG.REQUEST_TIMEOUT
+    }
+  );
+
+  return response.data?.choices?.[0]?.message?.content?.trim();
+}
+
+// Groq API (fast and free alternative)
+async function callGroq(message, history) {
+  if (!process.env.GROQ_API_KEY) throw new Error('No Groq API key');
+  
+  const messages = [
+    {
+      role: 'system',
+      content: 'You are a helpful Discord chatbot. Be friendly, conversational, and engaging. Keep responses concise but informative.'
+    }
+  ];
+  
+  for (const msg of history.slice(-6)) {
+    messages.push({ role: msg.role, content: msg.content });
+  }
+  
+  messages.push({ role: 'user', content: message });
+
+  const response = await axios.post(
+    'https://api.groq.com/openai/v1/chat/completions',
+    {
+      model: 'llama3-8b-8192',
+      messages: messages,
+      max_tokens: 200,
+      temperature: 0.7
+    },
+    {
+      headers: {
+        'Authorization': `Bearer ${process.env.GROQ_API_KEY}`,
+        'Content-Type': 'application/json',
+      },
+      timeout: CONFIG.REQUEST_TIMEOUT
+    }
+  );
+
+  return response.data?.choices?.[0]?.message?.content?.trim();
+}
+
+// Cohere API
+async function callCohere(message, history) {
+  if (!process.env.COHERE_API_KEY) throw new Error('No Cohere API key');
+  
+  let conversationText = '';
+  for (const msg of history.slice(-4)) {
+    conversationText += `${msg.role === 'user' ? 'User' : 'Bot'}: ${msg.content}\n`;
+  }
+  conversationText += `User: ${message}\nBot:`;
+
+  const response = await axios.post(
+    'https://api.cohere.ai/v1/generate',
+    {
+      model: 'command-light',
+      prompt: conversationText,
+      max_tokens: 150,
+      temperature: 0.8,
+      stop_sequences: ['User:', 'Bot:']
+    },
+    {
+      headers: {
+        'Authorization': `Bearer ${process.env.COHERE_API_KEY}`,
+        'Content-Type': 'application/json',
+      },
+      timeout: CONFIG.REQUEST_TIMEOUT
+    }
+  );
+
+  return response.data?.generations?.[0]?.text?.trim();
+}
+
+// Anthropic Claude API
+async function callAnthropic(message, history) {
+  if (!process.env.ANTHROPIC_API_KEY) throw new Error('No Anthropic API key');
+  
+  let conversation = '';
+  for (const msg of history.slice(-4)) {
+    conversation += `${msg.role === 'user' ? 'Human' : 'Assistant'}: ${msg.content}\n`;
+  }
+  conversation += `Human: ${message}\nAssistant:`;
+
+  const response = await axios.post(
+    'https://api.anthropic.com/v1/complete',
+    {
+      model: 'claude-instant-1',
+      prompt: conversation,
+      max_tokens_to_sample: 150,
+      temperature: 0.8
+    },
+    {
+      headers: {
+        'x-api-key': process.env.ANTHROPIC_API_KEY,
+        'Content-Type': 'application/json',
+      },
+      timeout: CONFIG.REQUEST_TIMEOUT
+    }
+  );
+
+  return response.data?.completion?.trim();
+}
+
+// Hugging Face Chat Models (fallback)
+async function callHuggingFaceChat(message, history) {
+  if (!process.env.HUGGINGFACE_API_KEY) throw new Error('No HuggingFace API key');
+  
+  // Use a better conversational model
+  const response = await axios.post(
+    'https://api-inference.huggingface.co/models/microsoft/DialoGPT-large',
+    {
+      inputs: {
+        past_user_inputs: history.filter(h => h.role === 'user').slice(-3).map(h => h.content),
+        generated_responses: history.filter(h => h.role === 'assistant').slice(-3).map(h => h.content),
+        text: message
+      },
+      parameters: {
+        temperature: 0.8,
+        max_length: 100
+      }
+    },
+    {
+      headers: {
+        'Authorization': `Bearer ${process.env.HUGGINGFACE_API_KEY}`,
+        'Content-Type': 'application/json',
+      },
+      timeout: CONFIG.REQUEST_TIMEOUT
+    }
+  );
+
+  return response.data?.generated_text || response.data?.response;
 }
 
 // Discord event handlers
 client.once('ready', () => {
-  console.log(`✅ Logged in as ${client.user.tag}`);
-  console.log(`📊 Serving ${client.guilds.cache.size} guilds`);
+  console.log(`✅ ${client.user.tag} is online!`);
+  console.log(`📊 Connected to ${client.guilds.cache.size} servers`);
   
-  client.user.setActivity('conversations | !ping', { type: 'LISTENING' });
+  client.user.setActivity('intelligent conversations', { type: 'LISTENING' });
   
-  // Keep-alive ping
+  // Periodic status update
   setInterval(() => {
     const channel = client.channels.cache.get(CONFIG.TEST_CHANNEL_ID);
-    if (channel && channel.isTextBased()) {
+    if (channel?.isTextBased?.()) {
       const messages = [
-        '🤖 AI chatbot online and ready!',
-        '💬 Having natural conversations!',
-        '🧠 Multiple AI models loaded!',
-        '⚡ Powered by real AI, not if-statements!'
+        '🧠 AI chatbot ready for intelligent conversation!',
+        '💬 Ask me anything - I can understand and respond naturally!',
+        '🤖 Powered by advanced language models!',
+        '⚡ Real AI, real conversations!'
       ];
       const randomMessage = messages[Math.floor(Math.random() * messages.length)];
       channel.send(randomMessage).catch(console.error);
@@ -314,109 +276,116 @@ client.once('ready', () => {
 });
 
 client.on('messageCreate', async (message) => {
+  // Ignore bot messages
   if (message.author.bot) return;
   
   // Handle ping command
   if (message.content.toLowerCase() === '!ping') {
     const embed = {
-      color: 0x00ff00,
-      title: '🤖 AI Chatbot Status',
-      description: 'Real AI conversation, no hardcoded responses!',
+      color: 0x7289da,
+      title: '🤖 AI Bot Status',
+      description: 'Intelligent conversational AI ready!',
       fields: [
-        { name: '⏱️ Latency', value: `${Date.now() - message.createdTimestamp}ms`, inline: true },
-        { name: '📡 Discord', value: `${Math.round(client.ws.ping)}ms`, inline: true },
-        { name: '🧠 AI Models', value: 'HuggingFace + Fallbacks', inline: true },
-        { name: '💬 Type', value: 'Conversational AI', inline: false },
+        { name: '⏱️ Response Time', value: `${Date.now() - message.createdTimestamp}ms`, inline: true },
+        { name: '🌐 Connection', value: `${Math.round(client.ws.ping)}ms`, inline: true },
+        { name: '🧠 AI Status', value: 'Multiple providers active', inline: true },
+        { name: '💡 Capability', value: 'Natural language understanding', inline: false }
       ],
       timestamp: new Date().toISOString(),
+      footer: { text: 'Mention me to start chatting!' }
     };
     
-    message.reply({ embeds: [embed] }).catch(console.error);
-    return;
+    return message.reply({ embeds: [embed] }).catch(console.error);
   }
   
   // Respond when mentioned or in DMs
-  if (message.mentions.has(client.user) || message.channel.type === 1) {
-    const messageId = message.id;
-    
-    if (processingMessages.has(messageId)) return;
-    processingMessages.add(messageId);
-    
-    try {
-      await handleAIConversation(message);
-    } finally {
-      setTimeout(() => processingMessages.delete(messageId), 5000);
-    }
+  const shouldRespond = message.mentions.has(client.user) || 
+                       message.channel.type === 1 || 
+                       message.reference?.messageId; // Reply to bot
+  
+  if (!shouldRespond) return;
+  
+  // Prevent duplicate processing
+  if (processingMessages.has(message.id)) return;
+  processingMessages.add(message.id);
+  
+  try {
+    await handleConversation(message);
+  } finally {
+    setTimeout(() => processingMessages.delete(message.id), 10000);
   }
 });
 
-async function handleAIConversation(message) {
+async function handleConversation(message) {
   const channelId = message.channel.id;
   const history = conversationHistory.get(channelId) || [];
   
   // Show typing indicator
   const typingInterval = setInterval(() => {
-    message.channel.sendTyping().catch(() => clearInterval(typingInterval));
+    message.channel.sendTyping().catch(() => {});
   }, 5000);
   
   try {
-    message.channel.sendTyping();
+    await message.channel.sendTyping();
     
-    // Clean the user's message
-    const userMessage = message.content
+    // Clean user message
+    let userMessage = message.content
       .replace(`<@${client.user.id}>`, '')
-      .replace(/<@!?\d+>/g, '')
+      .replace(`<@!${client.user.id}>`, '')
+      .replace(/<@!?\d+>/g, '') // Remove other mentions
       .trim();
     
-    console.log(`💬 Processing: "${userMessage}"`);
+    if (!userMessage) {
+      userMessage = "Hello!";
+    }
+    
+    console.log(`💭 User (${message.author.username}): ${userMessage}`);
     
     // Generate AI response
-    const aiReply = await generateAIResponse(userMessage, history);
+    const aiResponse = await generateAIResponse(userMessage, history);
     
-    if (aiReply) {
+    if (aiResponse && aiResponse.trim()) {
+      // Truncate if too long
+      const finalResponse = aiResponse.length > CONFIG.MAX_MESSAGE_LENGTH 
+        ? aiResponse.substring(0, CONFIG.MAX_MESSAGE_LENGTH - 3) + '...'
+        : aiResponse;
+      
       // Send response
-      await message.reply(aiReply);
+      await message.reply(finalResponse);
       
-      // Store conversation
+      // Update conversation history
       addToHistory(channelId, 'user', userMessage);
-      addToHistory(channelId, 'assistant', aiReply);
+      addToHistory(channelId, 'assistant', finalResponse);
       
-      console.log(`✅ Responded: "${aiReply}"`);
+      console.log(`🤖 Bot responded: ${finalResponse.substring(0, 100)}...`);
     }
     
   } catch (error) {
-    console.error('❌ Conversation Error:', error);
-    await message.reply('🤖 My AI brain had a hiccup! Try asking me something else.').catch(console.error);
-    
+    console.error('❌ Conversation error:', error);
+    await message.reply('🤖 Sorry, I encountered an error. Please try again!').catch(console.error);
   } finally {
     clearInterval(typingInterval);
   }
 }
 
 // Error handling
-client.on('error', (error) => {
-  console.error('Discord client error:', error);
-});
-
-process.on('unhandledRejection', (reason, promise) => {
-  console.error('Unhandled Rejection:', reason);
+client.on('error', console.error);
+process.on('unhandledRejection', (reason) => {
+  console.error('Unhandled promise rejection:', reason);
 });
 
 // Graceful shutdown
-process.on('SIGINT', () => {
-  console.log('🛑 Shutting down gracefully...');
+const shutdown = () => {
+  console.log('🛑 Shutting down...');
   client.destroy();
   process.exit(0);
-});
+};
 
-process.on('SIGTERM', () => {
-  console.log('🛑 Shutting down gracefully...');
-  client.destroy();
-  process.exit(0);
-});
+process.on('SIGINT', shutdown);
+process.on('SIGTERM', shutdown);
 
-// Login
+// Start the bot
 client.login(process.env.DISCORD_TOKEN).catch((error) => {
-  console.error('Failed to login:', error);
+  console.error('❌ Failed to login:', error);
   process.exit(1);
 });
