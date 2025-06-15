@@ -150,14 +150,14 @@ async function handleAIResponse(message) {
     const messagesForAI = [
       { 
         role: 'system', 
-        content: `You are a helpful and witty assistant in a Discord chat. Keep responses concise and engaging. Current time: ${new Date().toLocaleString()}`
+        content: `You are a friendly Discord bot assistant. Be helpful, concise, and conversational. Keep responses under 3 sentences when possible. Current time: ${new Date().toLocaleString()}`
       },
       ...history.slice(-10).map(h => ({ role: h.role, content: h.content }))
     ];
     
     // Call OpenRouter API
     const response = await axios.post('https://openrouter.ai/api/v1/chat/completions', {
-      model: process.env.AI_MODEL || 'openai/gpt-3.5-turbo',
+      model: process.env.AI_MODEL || 'openchat/openchat-3.5-1210',
       messages: messagesForAI,
       max_tokens: 500,
       temperature: 0.7,
