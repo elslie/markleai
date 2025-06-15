@@ -66,10 +66,20 @@ const truncateMessage = (message, maxLength = CONFIG.MAX_MESSAGE_LENGTH) => {
 
 // Enhanced response generation with multiple strategies
 async function generateResponse(userMessage, history = []) {
-  // Try Hugging Face first
+  // Skip empty or very short messages
+  if (!userMessage || userMessage.length < 2) {
+    return "What's on your mind?";
+  }
+  
+  // Try Hugging Face first with better filtering
   try {
     const hfResponse = await callHuggingFace(userMessage, history);
-    if (hfResponse && hfResponse.length > 10 && !hfResponse.includes("I'm here")) {
+    if (hfResponse && 
+        hfResponse.length > 5 && 
+        !hfResponse.match(/^(hi|hello|hey|i'm here|thanks)\.?$/i) &&
+        !hfResponse.includes("I'm here") &&
+        !hfResponse.includes("would you like to")) {
+      console.log('Using HF response:', hfResponse);
       return hfResponse;
     }
   } catch (error) {
@@ -84,125 +94,98 @@ async function generateResponse(userMessage, history = []) {
 function generateSmartFallback(message, history = []) {
   const msg = message.toLowerCase().trim();
   
-  // Greeting responses
-  if (msg.match(/\b(hi|hello|hey|sup|what's up)\b/)) {
+  // Handle basic greetings
+  if (msg.match(/^(hi|hello|hey|sup|what's up|whats up)$/)) {
     const greetings = [
-      "Hey there! How's it going? 😊",
-      "Hello! Nice to see you here! What's on your mind?",
-      "Hi! I'm doing great, thanks for asking! How about you?",
-      "Hey! Good to chat with you! What would you like to talk about?",
-      "Hello there! Hope you're having a good day! 🌟"
+      "Hey! What's going on?",
+      "Hi there! How's your day going?",
+      "Hello! What brings you here today?",
+      "Hey! Good to see you! What's new?",
+      "Hi! What would you like to chat about?"
     ];
     return greetings[Math.floor(Math.random() * greetings.length)];
   }
   
-  // How are you responses
-  if (msg.match(/how are you|how're you|how do you feel/)) {
+  // Handle "what's up" variations with more context
+  if (msg.match(/what.*up|whats.*up|wassup/)) {
     const responses = [
-      "I'm doing great! Thanks for asking! How are you doing today?",
-      "Pretty good! I love chatting with people. What about you?",
-      "I'm fantastic! Always excited to have a conversation. How's your day going?",
-      "Doing well! I'm here and ready to chat about whatever interests you!",
-      "Great! I'm enjoying our conversation already. How are things with you?"
+      "Not much, just hanging out here! What about you?",
+      "Just chilling and ready to chat! How about you?",
+      "Nothing too exciting, but I'm here to talk! What's new with you?",
+      "Just vibing! What's going on in your world?",
+      "Same old, same old! What brings you by?"
     ];
     return responses[Math.floor(Math.random() * responses.length)];
   }
   
-  // Question responses
+  // Handle abbreviations and slang better
+  if (msg.match(/\bs\b.*\bp\b|s and p/)) {
+    const responses = [
+      "Not sure what you mean by that - could you explain?",
+      "I didn't catch that, could you clarify?",
+      "What do you mean exactly?",
+      "Can you elaborate on that?",
+      "I'm not following - what are you referring to?"
+    ];
+    return responses[Math.floor(Math.random() * responses.length)];
+  }
+  
+  // Handle questions
   if (msg.includes('?')) {
-    if (msg.match(/what.*do|what.*can|what.*are/)) {
-      const responses = [
-        "That's a great question! I'd love to help you explore that topic further.",
-        "Interesting question! What specifically would you like to know more about?",
-        "Good point! Let me think about that... What's your take on it?",
-        "That's something worth discussing! What made you curious about this?",
-        "Great question! I find that topic really fascinating too."
-      ];
-      return responses[Math.floor(Math.random() * responses.length)];
-    }
-    
-    if (msg.match(/why|how|when|where|who/)) {
-      const responses = [
-        "That's a thought-provoking question! What's your perspective on it?",
-        "Hmm, that's worth exploring! What do you think about it?",
-        "Interesting question! I'd love to hear your thoughts first.",
-        "That's something I find fascinating too! What got you thinking about this?",
-        "Good question! There are probably multiple ways to look at that."
-      ];
-      return responses[Math.floor(Math.random() * responses.length)];
-    }
-  }
-  
-  // Opinion/preference questions
-  if (msg.match(/do you like|favorite|prefer|opinion|think about/)) {
     const responses = [
-      "I find that really interesting! What's your take on it?",
-      "That's a cool topic! I'd love to hear your thoughts about it.",
-      "Good question! What do you think about it? I'm curious to hear your perspective.",
-      "That's something worth discussing! What's your experience with that?",
-      "Interesting! I'd love to know more about your thoughts on this."
+      "That's an interesting question! What do you think?",
+      "Good question! I'd love to hear your perspective on that.",
+      "Hmm, that's worth thinking about. What's your take?",
+      "What made you curious about that?",
+      "That's something I find fascinating too!"
     ];
     return responses[Math.floor(Math.random() * responses.length)];
   }
   
-  // Thank you responses
-  if (msg.match(/thank|thanks|thx/)) {
-    const responses = [
-      "You're very welcome! Happy to help! 😊",
-      "No problem at all! That's what I'm here for!",
-      "My pleasure! Feel free to ask me anything else.",
-      "You're welcome! I enjoyed our conversation!",
-      "Glad I could help! What else would you like to chat about?"
-    ];
-    return responses[Math.floor(Math.random() * responses.length)];
-  }
-  
-  // Topic-specific responses
+  // Handle common topics
   if (msg.match(/game|gaming|play/)) {
-    const responses = [
-      "Gaming is awesome! What kind of games do you enjoy playing?",
-      "I love hearing about games! What's your current favorite?",
-      "Games are so much fun! Are you into any particular genre?",
-      "Gaming is such a great hobby! What have you been playing lately?",
-      "Cool! I'd love to hear about your gaming experiences!"
-    ];
-    return responses[Math.floor(Math.random() * responses.length)];
+    return "Gaming sounds fun! What games are you into?";
   }
   
   if (msg.match(/music|song|listen/)) {
-    const responses = [
-      "Music is amazing! What kind of music do you like?",
-      "I love talking about music! What's your favorite genre?",
-      "Music has such a great impact! What are you listening to lately?",
-      "That's cool! Music is such a universal language. What's your taste?",
-      "Awesome! I'd love to hear about your musical preferences!"
-    ];
-    return responses[Math.floor(Math.random() * responses.length)];
+    return "Music is awesome! What kind of music do you like?";
   }
   
   if (msg.match(/movie|film|watch|tv|show/)) {
+    return "Cool! What have you been watching lately?";
+  }
+  
+  if (msg.match(/work|job|school/)) {
+    return "How's that going for you?";
+  }
+  
+  if (msg.match(/tired|sleepy|busy/)) {
+    return "I hear you! Sometimes you just need a break.";
+  }
+  
+  if (msg.match(/thanks|thank you|thx/)) {
+    return "You're welcome! What else is on your mind?";
+  }
+  
+  // Handle longer messages with more substance
+  if (message.length > 20) {
     const responses = [
-      "Movies and shows are great! What have you been watching lately?",
-      "I love hearing about what people watch! Any recommendations?",
-      "That sounds interesting! What kind of movies or shows do you enjoy?",
-      "Cool! I'd love to hear about your favorite films or series!",
-      "Entertainment is awesome! What's caught your attention recently?"
+      "That's really interesting! Tell me more.",
+      "I see what you mean. What do you think about that?",
+      "That's a good point. How do you feel about it?",
+      "Interesting perspective! What's your experience with that?",
+      "That sounds worth exploring further!"
     ];
     return responses[Math.floor(Math.random() * responses.length)];
   }
   
-  // Default conversational responses
+  // Default responses for short/unclear messages
   const defaultResponses = [
-    "That's really interesting! Tell me more about that.",
-    "I'd love to hear more about your thoughts on this!",
-    "That sounds fascinating! What made you think about that?",
-    "Cool! I'm enjoying our conversation. What else is on your mind?",
-    "That's a great point! I'd love to explore that topic further with you.",
-    "Interesting perspective! What's your experience with that?",
-    "I find that topic really engaging! What do you think about it?",
-    "That's worth discussing! I'm curious to hear more of your thoughts.",
-    "Great topic! I'd love to continue this conversation with you.",
-    "That's something I'd like to learn more about! What's your take?"
+    "What's on your mind?",
+    "Tell me more about that!",
+    "What would you like to talk about?",
+    "I'm listening - what's up?",
+    "What brings you here today?"
   ];
   
   return defaultResponses[Math.floor(Math.random() * defaultResponses.length)];
@@ -212,29 +195,28 @@ function generateSmartFallback(message, history = []) {
 async function callHuggingFace(text, history = [], retries = 2) {
   const models = [
     'microsoft/DialoGPT-medium',
-    'facebook/blenderbot-400M-distill',
-    'microsoft/DialoGPT-small'
+    'facebook/blenderbot-400M-distill'
   ];
   
   for (let i = 0; i < models.length; i++) {
     const model = models[i];
     
     try {
-      console.log(`Trying model: ${model}`);
+      console.log(`Trying model: ${model} with input: "${text}"`);
       
-      // Prepare better input format
-      let inputText = '';
+      // Prepare input based on model type
+      let inputText = text;
       
       if (model.includes('DialoGPT')) {
-        // DialoGPT format
+        // For DialoGPT, use conversation format
         const recentHistory = history.slice(-2);
+        let conversation = '';
+        
         for (const msg of recentHistory) {
-          inputText += `${msg.role === 'user' ? 'Human' : 'Bot'}: ${msg.content}\n`;
+          conversation += `${msg.role === 'user' ? 'Human' : 'Bot'}: ${msg.content}\n`;
         }
-        inputText += `Human: ${text}\nBot:`;
-      } else {
-        // BlenderBot format
-        inputText = text;
+        conversation += `Human: ${text}\nBot:`;
+        inputText = conversation;
       }
       
       const response = await axios.post(
@@ -242,12 +224,12 @@ async function callHuggingFace(text, history = [], retries = 2) {
         { 
           inputs: inputText,
           parameters: {
-            max_length: model.includes('DialoGPT') ? 50 : 100,
-            max_new_tokens: 50,
+            max_new_tokens: 60,
             do_sample: true,
-            temperature: 0.8,
+            temperature: 0.7,
             top_p: 0.9,
-            repetition_penalty: 1.1
+            repetition_penalty: 1.2,
+            pad_token_id: 50256
           }
         },
         {
@@ -263,19 +245,41 @@ async function callHuggingFace(text, history = [], retries = 2) {
         let reply = response.data[0].generated_text || response.data[0].response || '';
         
         // Clean up DialoGPT response
-        if (model.includes('DialoGPT') && reply.includes(inputText)) {
-          reply = reply.replace(inputText, '').trim();
+        if (model.includes('DialoGPT')) {
+          // Remove the input conversation from the response
+          if (reply.includes('Bot:')) {
+            const parts = reply.split('Bot:');
+            reply = parts[parts.length - 1].trim();
+          }
+          
+          // Remove any remaining conversation artifacts
+          reply = reply
+            .replace(/Human:.*$/gi, '')
+            .replace(/Bot:.*$/gi, '')
+            .split('\n')[0] // Take only first line
+            .trim();
         }
         
-        // Clean up common issues
+        // General cleanup
         reply = reply
-          .replace(/^(Bot:|Assistant:|AI:)/i, '')
-          .replace(/Human:/gi, '')
+          .replace(/^(Assistant:|AI:|Bot:)/i, '')
           .replace(/\n+/g, ' ')
+          .replace(/\s+/g, ' ')
           .trim();
         
-        if (reply && reply.length > 3 && !reply.match(/^(hi|hello|hey)\.?$/i)) {
+        // Filter out bad responses
+        if (reply && 
+            reply.length > 3 && 
+            reply.length < 200 &&
+            !reply.match(/^(hi|hello|hey|ok|yes|no|sure)\.?$/i) &&
+            !reply.includes('I don\'t know') &&
+            !reply.includes('I can\'t') &&
+            !reply.includes('sorry')) {
+          
+          console.log(`Got good response from ${model}: "${reply}"`);
           return reply;
+        } else {
+          console.log(`Filtered out response from ${model}: "${reply}"`);
         }
       }
       
@@ -288,13 +292,11 @@ async function callHuggingFace(text, history = [], retries = 2) {
         await new Promise(resolve => setTimeout(resolve, 10000));
         return await callHuggingFace(text, history, retries - 1);
       }
-      
-      // Try next model
-      continue;
     }
   }
   
   // Return null to trigger fallback
+  console.log('All HF models failed, using fallback');
   return null;
 }
 
