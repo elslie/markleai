@@ -27,38 +27,38 @@ const client = new Client({
     ],
 });
 
-// Grok API configuration
-const GROK_API_URL = 'https://api.x.ai/v1/chat/completions';
-const GROK_API_KEY = process.env.GROK_API_KEY;
+// Groq API configuration
+const GROQ_API_URL = 'https://api.groq.com/openai/v1/chat/completions';
+const GROQ_API_KEY = process.env.GROQ_API_KEY;
 const DISCORD_TOKEN = process.env.DISCORD_TOKEN;
 
 // Rate limiting map to prevent spam
 const userCooldowns = new Map();
 const COOLDOWN_TIME = 5000; // 5 seconds
 
-// Function to call Grok AI
-async function callGrokAI(message, username) {
+// Function to call Groq AI
+async function callGroqAI(message, username) {
     try {
         const response = await axios.post(
-            GROK_API_URL,
+            GROQ_API_URL,
             {
                 messages: [
                     {
                         role: 'system',
-                        content: `You are Grok, a helpful AI assistant in a Discord server. Keep responses conversational and under 2000 characters. The user's name is ${username}.`
+                        content: `You are a helpful AI assistant in a Discord server. Keep responses conversational, friendly, and under 2000 characters. The user's name is ${username}. Be engaging and match the tone of the conversation.`
                     },
                     {
                         role: 'user',
                         content: message
                     }
                 ],
-                model: 'grok-beta',
+                model: 'llama3-8b-8192',
                 temperature: 0.7,
                 max_tokens: 500,
             },
             {
                 headers: {
-                    'Authorization': `Bearer ${GROK_API_KEY}`,
+                    'Authorization': `Bearer ${GROQ_API_KEY}`,
                     'Content-Type': 'application/json',
                 },
             }
@@ -66,7 +66,7 @@ async function callGrokAI(message, username) {
 
         return response.data.choices[0].message.content;
     } catch (error) {
-        console.error('Error calling Grok AI:', error.response?.data || error.message);
+        console.error('Error calling Groq AI:', error.response?.data || error.message);
         return 'Sorry, I encountered an error while processing your request. Please try again later.';
     }
 }
@@ -93,7 +93,7 @@ client.once('ready', () => {
     console.log(`📊 Serving ${client.guilds.cache.size} servers`);
     
     // Set bot status
-    client.user.setActivity('for @mentions | Powered by Grok AI', { type: 'WATCHING' });
+    client.user.setActivity('for @mentions | Powered by Groq AI', { type: 'WATCHING' });
 });
 
 // Message event handler
@@ -130,8 +130,8 @@ client.on('messageCreate', async (message) => {
             cleanContent = "Hello! How can I help you?";
         }
 
-        // Get response from Grok AI
-        const grokResponse = await callGrokAI(cleanContent, message.author.displayName);
+        // Get response from Groq AI
+        const groqResponse = await callGroqAI(cleanContent, message.author.displayName);
 
         // Create embed for the response
         const embed = new EmbedBuilder()
@@ -142,11 +142,11 @@ client.on('messageCreate', async (message) => {
             })
             .setDescription(cleanContent)
             .addFields({
-                name: '🤖 Grok AI Response',
-                value: grokResponse
+                name: '🤖 Groq AI Response',
+                value: groqResponse
             })
             .setFooter({
-                text: 'Powered by Grok AI',
+                text: 'Powered by Groq AI',
                 iconURL: client.user.displayAvatarURL()
             })
             .setTimestamp();
@@ -193,8 +193,8 @@ if (!DISCORD_TOKEN) {
     process.exit(1);
 }
 
-if (!GROK_API_KEY) {
-    console.error('❌ GROK_API_KEY is not set in environment variables');
+if (!GROQ_API_KEY) {
+    console.error('❌ GROQ_API_KEY is not set in environment variables');
     process.exit(1);
 }
 
