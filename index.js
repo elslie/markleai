@@ -22,6 +22,12 @@ const client = new Client({
   ]
 });
 
+client.on('messageCreate', message => {
+  if (message.content === '!ping') {
+    message.channel.send('Pong! I am alive and ready.');
+  }
+});
+
 const messageHistory = {}; // Store recent messages per channel
 
 client.on('messageCreate', async (message) => {
