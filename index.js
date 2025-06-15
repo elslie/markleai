@@ -1,6 +1,6 @@
 require('dotenv').config();
 const express = require('express');
-const { Client, GatewayIntentBits, EmbedBuilder } = require('discord.js');
+const { Client, GatewayIntentBits } = require('discord.js');
 const axios = require('axios');
 
 // Express server for keep-alive
@@ -115,7 +115,7 @@ client.on('messageCreate', async (message) => {
     setCooldown(message.author.id);
 
     // Show typing indicator
-    message.channel.sendTyping();
+    await message.channel.sendTyping();
 
     try {
         // Clean the message content (remove mentions)
@@ -133,40 +133,12 @@ client.on('messageCreate', async (message) => {
         // Get response from Groq AI
         const groqResponse = await callGroqAI(cleanContent, message.author.displayName);
 
-        // Create embed for the response
-        const embed = new EmbedBuilder()
-            .setColor(0x00AE86)
-            .setAuthor({
-                name: `${message.author.displayName} asked:`,
-                iconURL: message.author.displayAvatarURL()
-            })
-            .setDescription(cleanContent)
-            .addFields({
-                name: '🤖 Groq AI Response',
-                value: groqResponse
-            })
-            .setFooter({
-                text: 'Powered by Groq AI',
-                iconURL: client.user.displayAvatarURL()
-            })
-            .setTimestamp();
-
-        // Send the response
-        await message.reply({ embeds: [embed] });
+        // Send plain text response
+        await message.reply(groqResponse);
 
     } catch (error) {
         console.error('Error processing message:', error);
-        
-        const errorEmbed = new EmbedBuilder()
-            .setColor(0xFF0000)
-            .setTitle('❌ Error')
-            .setDescription('I encountered an error while processing your request. Please try again later.')
-            .setFooter({
-                text: 'If this persists, contact the server administrator',
-            })
-            .setTimestamp();
-
-        message.reply({ embeds: [errorEmbed] });
+        await message.reply('❌ Sorry, I encountered an error while processing your request. Please try again later.');
     }
 });
 
